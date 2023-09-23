@@ -2283,6 +2283,135 @@ void ctap_response_init(CTAP_RESPONSE * resp)
     resp->data_size = CTAP_RESPONSE_BUFFER_SIZE;
 }
 
+/**
+ * Checks if there is an rpId match, which means a user credential exists
+ * @return number of matches, 0 if no match was found
+ */
+uint8_t check_for_rpid_match(CTAP_secure_auth_register * REG)
+{
+    uint8_t rpIdHash[32];
+    int matches = 0;
+    CTAP_residentKey rk;
+
+    // Check if there is an rpId match
+    {
+        // Get proper IdHash of rpId
+        crypto_sha256_init();
+        crypto_sha256_update(REG->rp.id, REG->rp.size);
+        crypto_sha256_final(rpIdHash);
+
+        int i;
+        for(i = 0; i < ctap_rk_size(); i++)
+        {
+            ctap_load_rk(i, &rk);
+            if (!ctap_rk_is_valid(&rk)) {
+                continue;
+            }
+
+            // skip protected rk credential
+            int protection_status = check_credential_metadata(&rk.id, getAssertionState.user_verified, 0);
+            if (protection_status != 0) {
+                continue;
+            }
+
+            if (memcmp(rk.id.rpIdHash, rpIdHash, 32) == 0)
+            {
+                printf1(TAG_GREEN, "RK %d is a rpId match!\n", i);
+                matches++;
+            }
+        }
+    }
+    return matches;
+}
+
+/**
+ * Creates msk for secure auth extension
+ * msk := (k, r)
+ */
+static void secure_auth_setup(SecureAuthMSK * msk)
+{
+    uint8_t buffer[16];     // buffer for disposable public key
+    int i;
+
+    // Generate random private keys from ecc for k and r
+    // uecc make_key returns a random int in the range (0, n) for private key
+    for (i = 0; i < SEC_AUTH_MSK_N; i++) {
+        printf1(TAG_SA, "Generating msk for i=%d \n", i);
+        crypto_ecc256_make_key_pair(buffer, &msk->k[i*SEC_AUTH_MSK_K_SIZE]);
+        printf1(TAG_SA, "Generated k: ");
+        dump_hex1(TAG_SA, &msk->k[i*SEC_AUTH_MSK_K_SIZE], SEC_AUTH_MSK_K_SIZE);
+
+        crypto_ecc256_make_key_pair(buffer, &msk->r[i * SEC_AUTH_MSK_R_SIZE]);
+        printf1(TAG_SA, "Generated r: ");
+        dump_hex1(TAG_SA, &msk->r[i * SEC_AUTH_MSK_R_SIZE], SEC_AUTH_MSK_R_SIZE);
+
+        // Save to authenticator state
+        memmove(&getAssertionState.msk.k[i * SEC_AUTH_MSK_K_SIZE], &msk->k[i * SEC_AUTH_MSK_K_SIZE], SEC_AUTH_MSK_K_SIZE);
+        memmove(&getAssertionState.msk.r[i * SEC_AUTH_MSK_R_SIZE], &msk->r[i * SEC_AUTH_MSK_R_SIZE], SEC_AUTH_MSK_R_SIZE);
+    }
+}
+
+/**
+ * Prepares the output for the secure auth register ctap response
+ * Output includes: rid
+ *
+ * @return 0 if successful
+ */
+uint8_t ctap_get_register_output(CborEncoder * encoder, CTAP_secure_auth_register * REG, int map_size)
+{
+    CborEncoder map;
+    int ret;
+
+    ret = cbor_encoder_create_map(encoder, &map, map_size);
+    check_ret(ret);
+
+    ret = cbor_encode_text_stringz(&map, "rid");
+    check_ret(ret);
+
+    ret = cbor_encode_byte_string(&map, REG->rid, SEC_AUTH_RID_SIZE);
+    check_ret(ret);
+
+    ret = cbor_encoder_close_container(encoder, &map);
+    check_ret(ret);
+
+    return 0;
+}
+
+uint8_t ctap_secure_auth_register(CborEncoder * encoder, uint8_t * request, int length)
+{
+    CTAP_secure_auth_register REG;
+    int ret = ctap_parse_secure_auth_register_request(&REG, request, length);
+
+    if (ret != 0) {
+        printf1(TAG_ERR, "error, ctap_secure_auth_register failed\n");
+        return ret;
+    }
+
+    // check if rpId matches
+    if (check_for_rpid_match(&REG) == 0) {
+        return CTAP2_ERR_CREDENTIAL_NOT_VALID;
+    }
+
+    // Start setup process
+    secure_auth_setup(&REG.msk);   // call Secure Auth setup to create msk
+
+    // create random id
+    if (ctap_generate_rng(REG.rid, SEC_AUTH_RID_SIZE) != 1)
+    {
+        printf1(TAG_ERR,"Error, rng failed\n");
+        exit(1);
+    }
+    printf1(TAG_GREEN, "SECURE AUTH: Generated rid: ");
+    dump_hex1(TAG_GREEN, REG.rid, SEC_AUTH_RID_SIZE);
+    memmove(&getAssertionState.rid, REG.rid, SEC_AUTH_RID_SIZE);
+
+    // prepare output just rid for now
+    ret = ctap_get_register_output(encoder, &REG, 1);
+    check_ret(ret);
+
+    return 0;
+}
+
 
 uint8_t ctap_request(uint8_t * pkt_raw, int length, CTAP_RESPONSE * resp)
 {
@@ -2395,6 +2524,16 @@ uint8_t ctap_request(uint8_t * pkt_raw, int length, CTAP_RESPONSE * resp)
             resp->length = cbor_encoder_get_buffer_size(&encoder, buf);
 
             dump_hex1(TAG_DUMP,buf, resp->length);
+            break;
+        case CTAP_SECURE_AUTH_REGISTER:
+            printf1(TAG_CTAP,"CTAP_SECURE_AUTH_REGISTER\n");
+
+            timestamp();
+            status = ctap_secure_auth_register(&encoder, pkt_raw, length);
+            printf1(TAG_TIME,"secure_auth_register time: %d ms\n", timestamp());
+
+            resp->length = cbor_encoder_get_buffer_size(&encoder, buf);
+            dump_hex1(TAG_DUMP, buf, resp->length);
             break;
         default:
             status = CTAP1_ERR_INVALID_COMMAND;

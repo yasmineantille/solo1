@@ -1549,3 +1549,121 @@ uint8_t ctap_parse_client_pin(CTAP_clientPin * CP, uint8_t * request, int length
 
     return 0;
 }
+
+/// New Secure Auth additions
+
+/**
+ * Parses byte string of template and saves it to uint8_t * template
+ *
+ * @return 0 if successful, error otherwise
+ */
+uint8_t parse_template(CborValue * it, uint8_t * template)
+{
+    CborValue arr;
+    size_t arr_length;
+    int ret;
+    unsigned int i;
+
+    if (cbor_value_get_type(it) != CborArrayType)
+    {
+        printf1(TAG_ERR,"Error, expecting CborArrayType for secure auth biometric bio_template, got %s\n", cbor_value_get_type_string(it));
+        return CTAP2_ERR_INVALID_CBOR_TYPE;
+    }
+
+    ret = cbor_value_enter_container(it,&arr);
+    check_ret(ret);
+
+    ret = cbor_value_get_array_length(it, &arr_length);
+    check_ret(ret);
+
+    if (arr_length != SEC_AUTH_TEMPLATE_N) {
+        printf1(TAG_ERR,"Error, expecting n elements got %s\n", arr_length);
+        return CTAP2_ERR_NOT_ALLOWED;
+    }
+
+    for (i = 0; i < arr_length; i++) {
+        if (cbor_value_get_type(&arr) != CborByteStringType)
+        {
+            printf1(TAG_ERR,"Error, expecting CborIntegerType for secure auth biometrics, got %s\n", cbor_value_get_type_string(&arr));
+            return CTAP2_ERR_INVALID_CBOR_TYPE;
+        }
+
+        size_t sz = SEC_AUTH_TEMPLATE_SIZE;
+        ret = cbor_value_copy_byte_string(&arr, &template[i * SEC_AUTH_TEMPLATE_SIZE], &sz, NULL);
+        check_ret(ret);
+
+        printf1(TAG_SA, "Parsed bio_template at position i = %d : ", i);
+        dump_hex1(TAG_SA, &template[i * SEC_AUTH_TEMPLATE_SIZE], SEC_AUTH_TEMPLATE_SIZE);
+        printf("\n");
+
+        ret = cbor_value_advance(&arr);
+        check_ret(ret);
+    }
+    return 0;
+}
+
+uint8_t ctap_parse_secure_auth_register_request(CTAP_secure_auth_register * REG, uint8_t * request, int length)
+{
+    int ret;
+    unsigned int i;
+    int key;
+    size_t map_length;
+    CborParser parser;
+    CborValue it, map;
+
+    memset(REG, 0, sizeof(CTAP_secure_auth_register));
+    ret = cbor_parser_init(request, length, CborValidateCanonicalFormat, &parser, &it);
+    check_ret(ret);
+
+    CborType type = cbor_value_get_type(&it);
+    if (type != CborMapType)
+    {
+        printf1(TAG_ERR,"Error, expecting cbor map\n");
+        return CTAP2_ERR_INVALID_CBOR_TYPE;
+    }
+
+    ret = cbor_value_enter_container(&it,&map);
+    check_ret(ret);
+
+    ret = cbor_value_get_map_length(&it, &map_length);
+    check_ret(ret);
+
+    printf1(TAG_SA, "REG map has %d elements\n", map_length);
+
+    for (i = 0; i < map_length; i++)
+    {
+        if (cbor_value_get_type(&map) != CborIntegerType)
+        {
+            printf1(TAG_ERR,"Error, expecting int for map key\n");
+            return CTAP2_ERR_INVALID_CBOR_TYPE;
+        }
+        ret = cbor_value_get_int(&map, &key);
+        check_ret(ret);
+
+        ret = cbor_value_advance(&map);
+        check_ret(ret);
+
+        printf1(TAG_SA, "Current Key: %d\n", key);
+        switch(key)
+        {
+            case SA_rpId:
+                printf1(TAG_SA, "SA_rpId\n");
+                ret = parse_rp_id(&REG->rp, &map);
+                check_retr(ret);
+                if (!REG->rp.size) {
+                    return CTAP2_ERR_MISSING_PARAMETER;
+                }
+                break;
+            case SA_template:
+                printf1(TAG_SA, "SA_template\n");
+                ret = parse_template(&map, REG->template);
+                check_ret(ret);
+                break;
+            default:
+                printf1(TAG_CP,"Unknown key %d\n", key);
+        }
+        ret = cbor_value_advance(&map);
+        check_ret(ret);
+    }
+    return 0;
+}

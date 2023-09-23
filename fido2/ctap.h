@@ -20,6 +20,7 @@
 #define CTAP_VENDOR_FIRST           0x40
 #define CTAP_CBOR_CRED_MGMT_PRE     0x41
 #define CTAP_VENDOR_LAST            0xBF
+#define CTAP_SECURE_AUTH_REGISTER   0x11
 
 #define MC_clientDataHash         0x01
 #define MC_rp                     0x02
@@ -153,6 +154,25 @@
 
 #define CTAP2_UP_DELAY_MS           29000
 
+
+/// For Secure Auth
+#define SEC_AUTH_RID_SIZE       8
+
+// For master secret
+#define SEC_AUTH_MSK_N          0x80
+#define SEC_AUTH_MSK_K_SIZE     1
+#define SEC_AUTH_MSK_R_SIZE     1
+
+#define SEC_AUTH_TEMPLATE_N     0x80 // represents 128 in hex
+#define SEC_AUTH_TEMPLATE_SIZE  1
+
+// For Secure Auth extra requests
+#define SA_rpId               0x01
+#define SA_template           0x02
+//#define SA_rid                0x03
+
+
+
 typedef struct
 {
     uint8_t id[USER_ID_MAX_SIZE];
@@ -239,6 +259,21 @@ typedef struct
     int kty;
     int crv;
 } COSE_key;
+
+// master secret of sec auth setup
+// msk = ([k1, ..., kn], [r1, ..., rn])
+typedef struct {
+    uint8_t k[SEC_AUTH_MSK_N * SEC_AUTH_MSK_K_SIZE];
+    uint8_t r[SEC_AUTH_MSK_N * SEC_AUTH_MSK_R_SIZE];
+} SecureAuthMSK;
+
+typedef struct
+{
+    struct rpId rp;
+    uint8_t rid[SEC_AUTH_RID_SIZE];
+    uint8_t template[SEC_AUTH_TEMPLATE_N*SEC_AUTH_TEMPLATE_SIZE];
+    SecureAuthMSK msk;
+} CTAP_secure_auth_register;
 
 typedef struct
 {
@@ -375,6 +410,9 @@ struct _getAssertionState {
     uint8_t user_verified;
     uint8_t customCredId[256];
     uint8_t customCredIdSize;
+
+    uint8_t rid[SEC_AUTH_RID_SIZE];
+    SecureAuthMSK msk;
 };
 
 void ctap_response_init(CTAP_RESPONSE * resp);

@@ -30,24 +30,25 @@ int main(int argc, char *argv[])
     set_logging_mask(
 		/*0*/
 		//TAG_GEN|
-		// TAG_MC |
+		//TAG_MC |
 		// TAG_GA |
-		TAG_WALLET |
-		TAG_STOR |
+		//TAG_WALLET |
+		//TAG_STOR |
 		//TAG_NFC_APDU |
-		TAG_NFC |
+		//TAG_NFC |
 		//TAG_CP |
-		// TAG_CTAP|
+		TAG_CTAP|
 		//TAG_HID|
-		TAG_U2F|
-		//TAG_PARSE |
-		//TAG_TIME|
-		// TAG_DUMP|
+		//TAG_U2F|
+		TAG_PARSE |
+		TAG_TIME|
+		//TAG_DUMP|
 		TAG_GREEN|
 		TAG_RED|
-        TAG_EXT|
-        TAG_CCID|
-		TAG_ERR
+        //TAG_EXT|
+        //TAG_CCID|
+		TAG_ERR|
+        TAG_SA
 	);
 
     device_init(argc, argv);

@@ -806,7 +806,7 @@ void ctap_load_rk(int index,CTAP_residentKey * rk)
 
     uint32_t addr = flash_addr(page_offset + RK_START_PAGE) + byte_offset_into_page;
 
-    printf1(TAG_GREEN, "reading RK %d @ %04x\r\n", index, addr);
+    //printf1(TAG_GREEN, "reading RK %d @ %04x\r\n", index, addr);
     if (page_offset < RK_NUM_PAGES)
     {
         uint32_t * ptr = (uint32_t *)addr;

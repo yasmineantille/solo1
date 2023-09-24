@@ -2328,9 +2328,9 @@ uint8_t check_for_rpid_match(CTAP_secure_auth_register * REG)
  * Creates msk for secure auth extension
  * msk := (k, r)
  */
-static void secure_auth_setup(SecureAuthMSK * msk)
+static int secure_auth_setup(SecureAuthMSK * msk)
 {
-    uint8_t buffer[16];     // buffer for disposable public key
+    uint8_t buffer[SEC_AUTH_PUBLIC_KEY_SIZE];     // buffer for disposable public key
     int i;
 
     // Generate random private keys from ecc for k and r
@@ -2349,6 +2349,7 @@ static void secure_auth_setup(SecureAuthMSK * msk)
         memmove(&getAssertionState.msk.k[i * SEC_AUTH_MSK_K_SIZE], &msk->k[i * SEC_AUTH_MSK_K_SIZE], SEC_AUTH_MSK_K_SIZE);
         memmove(&getAssertionState.msk.r[i * SEC_AUTH_MSK_R_SIZE], &msk->r[i * SEC_AUTH_MSK_R_SIZE], SEC_AUTH_MSK_R_SIZE);
     }
+    return 0;
 }
 
 /**
@@ -2377,8 +2378,57 @@ uint8_t ctap_get_register_output(CborEncoder * encoder, CTAP_secure_auth_registe
     return 0;
 }
 
+/**
+ * Checks if the rid matches with the one saved in state
+ * @return 0 if matches, error otherwise
+ */
+uint8_t check_matching_rid(CTAP_secure_auth_register * REG)
+{
+    printf1(TAG_GREEN, "Parsed received rid : ");
+    dump_hex1(TAG_GREEN, REG->rid, SEC_AUTH_RID_SIZE);
+    printf1(TAG_GREEN, "\n");
+
+    printf1(TAG_GREEN, "State rid : ");
+    dump_hex1(TAG_GREEN, getAssertionState.rid, SEC_AUTH_RID_SIZE);
+    printf1(TAG_GREEN, "\n");
+
+    if (memcmp(getAssertionState.rid, REG->rid, SEC_AUTH_RID_SIZE) != 0)
+    {
+        printf1(TAG_ERR,"RID does not match\n");
+        return CTAP2_ERR_CREDENTIAL_NOT_VALID;
+    }
+    return 0;
+}
+
+uint8_t ctap_secure_auth_setup(CborEncoder * encoder, uint8_t * request, int length)
+{
+    CTAP_secure_auth_register REG;
+    int ret = ctap_parse_secure_auth_setup_request(&REG, request, length);
+
+    if (ret != 0) {
+        printf1(TAG_ERR, "error, ctap_secure_auth_setup failed\n");
+        return ret;
+    }
+
+    // check if either rpId or rid do not match
+    if (check_for_rpid_match(&REG) == 0 || check_matching_rid(&REG) != 0) {
+        return CTAP2_ERR_CREDENTIAL_NOT_VALID;
+    }
+
+    // Start setup process
+    ret = secure_auth_setup(&REG.msk);
+    check_ret(ret);
+
+    // prepare output just rid for now
+    ret = ctap_get_register_output(encoder, &REG, 1);
+    check_ret(ret);
+
+    return 0;
+}
+
 uint8_t ctap_secure_auth_register(CborEncoder * encoder, uint8_t * request, int length)
 {
+    printf1(TAG_SA, "reached ctap_secure_auth_register ");
     CTAP_secure_auth_register REG;
     int ret = ctap_parse_secure_auth_register_request(&REG, request, length);
 
@@ -2391,9 +2441,6 @@ uint8_t ctap_secure_auth_register(CborEncoder * encoder, uint8_t * request, int 
     if (check_for_rpid_match(&REG) == 0) {
         return CTAP2_ERR_CREDENTIAL_NOT_VALID;
     }
-
-    // Start setup process
-    secure_auth_setup(&REG.msk);   // call Secure Auth setup to create msk
 
     // create random id
     if (ctap_generate_rng(REG.rid, SEC_AUTH_RID_SIZE) != 1)
@@ -2531,6 +2578,16 @@ uint8_t ctap_request(uint8_t * pkt_raw, int length, CTAP_RESPONSE * resp)
             timestamp();
             status = ctap_secure_auth_register(&encoder, pkt_raw, length);
             printf1(TAG_TIME,"secure_auth_register time: %d ms\n", timestamp());
+
+            resp->length = cbor_encoder_get_buffer_size(&encoder, buf);
+            dump_hex1(TAG_DUMP, buf, resp->length);
+            break;
+        case CTAP_SECURE_AUTH_SETUP:
+            printf1(TAG_CTAP, "CTAP_SECURE_AUTH_SETUP\n");
+            timestamp();
+
+            status = ctap_secure_auth_setup(&encoder, pkt_raw, length);
+            printf1(TAG_TIME,"secure_auth_setup time: %d ms\n", timestamp());
 
             resp->length = cbor_encoder_get_buffer_size(&encoder, buf);
             dump_hex1(TAG_DUMP, buf, resp->length);

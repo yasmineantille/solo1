@@ -21,6 +21,7 @@
 #define CTAP_CBOR_CRED_MGMT_PRE     0x41
 #define CTAP_VENDOR_LAST            0xBF
 #define CTAP_SECURE_AUTH_REGISTER   0x11
+#define CTAP_SECURE_AUTH_SETUP      0x12
 
 #define MC_clientDataHash         0x01
 #define MC_rp                     0x02
@@ -159,9 +160,10 @@
 #define SEC_AUTH_RID_SIZE       8
 
 // For master secret
-#define SEC_AUTH_MSK_N          0x80
-#define SEC_AUTH_MSK_K_SIZE     1
-#define SEC_AUTH_MSK_R_SIZE     1
+#define SEC_AUTH_MSK_N          0x40    // 0x8 overflows memory space
+#define SEC_AUTH_MSK_K_SIZE     32
+#define SEC_AUTH_MSK_R_SIZE     32
+#define SEC_AUTH_PUBLIC_KEY_SIZE    64
 
 #define SEC_AUTH_TEMPLATE_N     0x80 // represents 128 in hex
 #define SEC_AUTH_TEMPLATE_SIZE  1
@@ -169,7 +171,7 @@
 // For Secure Auth extra requests
 #define SA_rpId               0x01
 #define SA_template           0x02
-//#define SA_rid                0x03
+#define SA_rid                0x02
 
 
 

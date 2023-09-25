@@ -319,6 +319,71 @@ void crypto_ecc256_shared_secret(const uint8_t * pubkey, const uint8_t * privkey
 
 }
 
+void crypto_calculate_mod_mult(uint8_t * result, uint8_t * y, uint8_t * r)
+{
+    if (uECC_multiply_mod_mult(result, y, r, _es256_curve) != 1) {
+        printf1(TAG_ERR, "Error, crypto_calculate_mod_mult() failed\n");
+        exit(1);
+    }
+}
+
+void crypto_calculate_inner_product(uint8_t * result, uint8_t * k, uint8_t * y)
+{
+    memset(result, 0, sizeof(SEC_AUTH_SCALAR_SIZE));  // set result to 0
+    uint8_t temp_result[SEC_AUTH_SCALAR_SIZE];
+
+    for(int i = 0; i < SEC_AUTH_TEMPLATE_N; i++) {
+        // pad the yi value with zeroes
+        uint8_t yi[32];
+        memset(yi, 0, 32); // Set all bytes in the array to 0
+        yi[31] = y[i * SEC_AUTH_TEMPLATE_SIZE];
+
+        if(uECC_multiply_mod_mult(temp_result, &k[i * SEC_AUTH_SCALAR_SIZE], yi, _es256_curve) != 1) {
+            printf1(TAG_ERR, "Error, uECC_multiply_mod_mult() failed\n");
+            exit(1);
+        }
+        printf1(TAG_SA, "Resulting multiply mod p value for inner product: ");
+        dump_hex1(TAG_SA, temp_result, SEC_AUTH_SCALAR_SIZE);
+
+        if(uECC_add_mod_p(result, result, temp_result, _es256_curve) != 1) {
+            printf1(TAG_ERR, "Error, uECC_add_mod_p() failed\n");
+            exit(1);
+        }
+        printf1(TAG_SA, "Resulting add result for inner product: ");
+        dump_hex1(TAG_SA, result, SEC_AUTH_SCALAR_SIZE);
+        memset(temp_result, 0, sizeof(temp_result));  // set temp_result back to 0
+    }
+}
+
+void crypto_ecc256_scalar_mult(uint8_t * result, uint8_t * point, uint8_t * scalar)
+{
+    if (uECC_scalar_multiplication(result, point, scalar, _es256_curve) != 1) {
+        printf1(TAG_ERR, "Error, crypto_ecc256_scalar_mult() failed\n");
+        exit(1);
+    } else {
+        if (uECC_valid_public_key(result, _es256_curve) != 1) {
+            printf1(TAG_ERR, "Not valid public key!");
+            exit(1);
+        }
+    }
+}
+
+
+void crypto_ecc256_addition(uint8_t * result, uint8_t * point_one, uint8_t * point_two)
+{
+    if (uECC_addition(result, point_one, point_two, _es256_curve) != 1) {
+        printf1(TAG_ERR, "Error, crypto_ecc256_addition() failed\n");
+        exit(1);
+    }
+}
+
+void crypto_ecc256_modular_inverse(uint8_t * result, uint8_t * r) {
+    if (uECC_calculate_mod_inv(result, r, _es256_curve) != 1) {
+        printf1(TAG_ERR, "Error, crypto_ecc256_modular_inverse() failed\n");
+        exit(1);
+    }
+}
+
 struct AES_ctx aes_ctx;
 void crypto_aes256_init(uint8_t * key, uint8_t * nonce)
 {

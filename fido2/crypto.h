@@ -53,5 +53,10 @@ void crypto_aes256_encrypt(uint8_t * buf, int lenth);
 void crypto_reset_master_secret();
 void crypto_load_master_secret(uint8_t * key);
 
+void crypto_calculate_mod_mult(uint8_t * result, uint8_t * y, uint8_t * r);
+void crypto_calculate_inner_product(uint8_t * result, uint8_t * k, uint8_t * y);
+void crypto_ecc256_scalar_mult(uint8_t * result, uint8_t * point, uint8_t * scalar);
+void crypto_ecc256_addition(uint8_t * result, uint8_t * point_one, uint8_t * point_two);
+void crypto_ecc256_modular_inverse(uint8_t * result, uint8_t * r);
 
 #endif

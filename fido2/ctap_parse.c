@@ -1602,7 +1602,7 @@ uint8_t parse_template(CborValue * it, uint8_t * template)
     return 0;
 }
 
-uint8_t ctap_parse_secure_auth_setup_request(CTAP_secure_auth_register * REG, uint8_t * request, int length)
+uint8_t ctap_parse_secure_auth_rpid_rid_request(CTAP_secure_auth_register * REG, uint8_t * request, int length)
 {
     int ret;
     unsigned int i;
@@ -1724,6 +1724,77 @@ uint8_t ctap_parse_secure_auth_register_request(CTAP_secure_auth_register * REG,
                 printf1(TAG_SA, "SA_template\n");
                 ret = parse_template(&map, REG->template);
                 check_ret(ret);
+                break;
+            default:
+                printf1(TAG_CP,"Unknown key %d\n", key);
+        }
+        ret = cbor_value_advance(&map);
+        check_ret(ret);
+    }
+    return 0;
+}
+
+uint8_t ctap_parse_secure_auth_auth_request(CTAP_secure_auth_authenticate * AUTH, uint8_t * request, int length)
+{
+    int ret;
+    unsigned int i;
+    int key;
+    size_t map_length;
+    CborParser parser;
+    CborValue it, map;
+
+    memset(AUTH, 0, sizeof(CTAP_secure_auth_authenticate));
+    ret = cbor_parser_init(request, length, CborValidateCanonicalFormat, &parser, &it);
+    check_ret(ret);
+
+    CborType type = cbor_value_get_type(&it);
+    if (type != CborMapType)
+    {
+        printf1(TAG_ERR,"Error, expecting cbor map\n");
+        return CTAP2_ERR_INVALID_CBOR_TYPE;
+    }
+
+    ret = cbor_value_enter_container(&it,&map);
+    check_ret(ret);
+
+    ret = cbor_value_get_map_length(&it, &map_length);
+    check_ret(ret);
+
+    printf1(TAG_SA, "REG map has %d elements\n", map_length);
+
+    for (i = 0; i < map_length; i++)
+    {
+        if (cbor_value_get_type(&map) != CborIntegerType)
+        {
+            printf1(TAG_ERR,"Error, expecting int for map key\n");
+            return CTAP2_ERR_INVALID_CBOR_TYPE;
+        }
+        ret = cbor_value_get_int(&map, &key);
+        check_ret(ret);
+
+        ret = cbor_value_advance(&map);
+        check_ret(ret);
+
+        printf1(TAG_SA, "Current Key: %d\n", key);
+        switch(key)
+        {
+            case SA_rpId:
+                printf1(TAG_SA, "SA_rpId\n");
+                ret = parse_rp_id(&AUTH->rp, &map);
+                check_retr(ret);
+                if (!AUTH->rp.size) {
+                    return CTAP2_ERR_MISSING_PARAMETER;
+                }
+                break;
+            case SA_template:
+                printf1(TAG_SA, "SA_template\n");
+                ret = parse_template(&map, AUTH->template);
+                check_ret(ret);
+                break;
+            case SA_rid:
+                printf1(TAG_SA, "SA_rid\n");
+                ret = parse_fixed_byte_string(&map, AUTH->rid, SEC_AUTH_RID_SIZE);
+                check_retr(ret);
                 break;
             default:
                 printf1(TAG_CP,"Unknown key %d\n", key);

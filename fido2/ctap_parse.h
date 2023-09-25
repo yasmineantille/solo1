@@ -40,6 +40,7 @@ uint8_t ctap_parse_client_pin(CTAP_clientPin * CP, uint8_t * request, int length
 uint8_t parse_credential_descriptor(CborValue * arr, CTAP_credentialDescriptor * cred);
 
 uint8_t ctap_parse_secure_auth_register_request(CTAP_secure_auth_register * REG, uint8_t * request, int length);
-uint8_t ctap_parse_secure_auth_setup_request(CTAP_secure_auth_register * REG, uint8_t * request, int length);
+uint8_t ctap_parse_secure_auth_rpid_rid_request(CTAP_secure_auth_register * REG, uint8_t * request, int length);
+uint8_t ctap_parse_secure_auth_auth_request(CTAP_secure_auth_authenticate * AUTH, uint8_t * request, int length);
 
 #endif

@@ -2330,7 +2330,7 @@ uint8_t check_for_rpid_match(CTAP_secure_auth_register * REG)
  */
 static int secure_auth_setup(SecureAuthMSK * msk)
 {
-    uint8_t buffer[SEC_AUTH_PUBLIC_KEY_SIZE];     // buffer for disposable public key
+    uint8_t buffer[SEC_AUTH_POINT_SIZE];     // buffer for disposable public key
     int i;
 
     // Generate random private keys from ecc for k and r
@@ -2353,6 +2353,154 @@ static int secure_auth_setup(SecureAuthMSK * msk)
 }
 
 /**
+ * Key derivation for secure auth extension
+ * k_y = sum k_i*y_i (mod n)
+ * y_bar_i = r_i*y_i (mod n)
+ * sk_y = (k_y, y_bar)
+ */
+static void secure_auth_key_derivation(CTAP_secure_auth_register * REG)
+{
+    SecureAuthMSK * msk = &REG->msk;
+    SecureAuthKey * sa_key = &REG->key;
+
+    for(int i = 0; i < SEC_AUTH_TEMPLATE_N; i++) {
+        printf1(TAG_GREEN, "Key derivation for i=%d \n", i);
+        printf1(TAG_GREEN, "y_i value: ");
+        dump_hex1(TAG_GREEN, &REG->template[i * SEC_AUTH_TEMPLATE_SIZE], SEC_AUTH_TEMPLATE_SIZE);
+        printf1(TAG_GREEN, "r_i value: ");
+        dump_hex1(TAG_GREEN, &msk->r[i * SEC_AUTH_MSK_R_SIZE], SEC_AUTH_MSK_R_SIZE);
+
+        // pad the yi value with zeroes
+        uint8_t yi[32];
+        memset(yi, 0, 32); // Set all bytes in the array to 0
+        yi[31] = REG->template[i * SEC_AUTH_TEMPLATE_SIZE];
+
+        crypto_calculate_mod_mult(&sa_key->y_bar[i * SEC_AUTH_SCALAR_SIZE],
+                                  yi,
+                                  &msk->r[i * SEC_AUTH_MSK_R_SIZE]);
+        printf1(TAG_GREEN, "Resulting y_bar value: ");
+        dump_hex1(TAG_GREEN, &sa_key->y_bar[i * SEC_AUTH_SCALAR_SIZE], SEC_AUTH_SCALAR_SIZE);
+        printf1(TAG_GREEN, "\n");
+        memmove(&getAssertionState.secretKey.y_bar[i * SEC_AUTH_SCALAR_SIZE], &sa_key->y_bar[i * SEC_AUTH_SCALAR_SIZE], SEC_AUTH_SCALAR_SIZE);
+
+        // calculate ri * yi
+        // Check if template value (yi) equals 1, then just return r because mod mult doesn't work with 1
+//        if (&REG->template[i*SEC_AUTH_TEMPLATE_SIZE] == 1) {
+//            printf1(TAG_SA, "Template value equals 1");
+//            memmove(&sa_key->y_bar[i * SEC_AUTH_SCALAR_SIZE], &msk->r[i * SEC_AUTH_MSK_R_SIZE], SEC_AUTH_SCALAR_SIZE);
+//            printf1(TAG_GREEN, "Resulting y_bar value: ");
+//            dump_hex1(TAG_GREEN, &sa_key->y_bar[i * SEC_AUTH_SCALAR_SIZE], SEC_AUTH_SCALAR_SIZE);
+//            printf1(TAG_GREEN, "\n");
+//            memmove(&getAssertionState.secretKey.y_bar[i * SEC_AUTH_SCALAR_SIZE], &sa_key->y_bar[i * SEC_AUTH_SCALAR_SIZE], SEC_AUTH_SCALAR_SIZE);
+//        } else {
+//            crypto_calculate_mod_mult(&sa_key->y_bar[i * SEC_AUTH_SCALAR_SIZE], &REG->template[i*SEC_AUTH_TEMPLATE_SIZE],
+//                                      &msk->r[i * SEC_AUTH_MSK_R_SIZE]);
+//            printf1(TAG_GREEN, "Resulting y_bar value: ");
+//            dump_hex1(TAG_GREEN, &sa_key->y_bar[i * SEC_AUTH_SCALAR_SIZE], SEC_AUTH_SCALAR_SIZE);
+//            printf1(TAG_GREEN, "\n");
+//            memmove(&getAssertionState.secretKey.y_bar[i * SEC_AUTH_SCALAR_SIZE], &sa_key->y_bar[i * SEC_AUTH_SCALAR_SIZE], SEC_AUTH_SCALAR_SIZE);
+//        }
+    }
+
+    // calculate ki * yi
+    crypto_calculate_inner_product(sa_key->k_y, msk->k, REG->template);
+    printf1(TAG_SA, "Resulting k_y value: ");
+    dump_hex1(TAG_SA, sa_key->k_y, SEC_AUTH_SCALAR_SIZE);
+
+    memmove(&getAssertionState.secretKey.k_y, sa_key->k_y, SEC_AUTH_SCALAR_SIZE);
+}
+
+/**
+ * Encryption
+ * x <- chosen uniformly at random from Group
+ * z should be passed along, currently is randomly chosen here
+ *
+ * @param msk pointer to SecureAuthMSK data
+ * @param enc pointer to SecureAuthEncrypt data
+ * @param z is message (biometric bio_template)
+ */
+static void secure_auth_encrypt(CTAP_secure_auth_authenticate * AUTH)
+{
+    printf1(TAG_SA, "Before encryption!\n");
+    SecureAuthEncrypt * enc = &AUTH->enc;
+
+    // For testing print out data to encrypt
+    for (int i = 0; i < SEC_AUTH_MSK_N; i++) {
+        printf1(TAG_SA, "printing z for i=%d : ", i);
+        dump_hex1(TAG_SA, &AUTH->template[i*SEC_AUTH_TEMPLATE_SIZE], SEC_AUTH_TEMPLATE_SIZE);
+    }
+
+    uint8_t priv_key_buf[SEC_AUTH_SCALAR_SIZE];  // buffer for private key that can be dismissed
+
+    // generate x as point on elliptic curve
+    crypto_ecc256_make_key_pair(enc->x, priv_key_buf);
+    printf1(TAG_GREEN, "Generated x: ");
+    dump_hex1(TAG_GREEN, enc->x, SEC_AUTH_POINT_SIZE);
+
+    // buffers for encryption intermediate results
+    uint8_t* result1_buf = (uint8_t*)malloc(SEC_AUTH_POINT_SIZE);
+    uint8_t* result2_buf = (uint8_t*)malloc(SEC_AUTH_POINT_SIZE);
+    uint8_t* result_addition_buf = (uint8_t*)malloc(SEC_AUTH_POINT_SIZE);
+    uint8_t* r_mod_inv = (uint8_t*)malloc(SEC_AUTH_MSK_R_SIZE);
+
+    // encrypt message
+    for (int j = 0; j < SEC_AUTH_MSK_N; ++j) {
+        // scalar multiplication of x with zi
+
+        // pad the zi value with zeroes
+        uint8_t zi[32];
+        memset(zi, 0, 32); // Set all bytes in the array to 0
+        zi[31] = AUTH->template[j * SEC_AUTH_TEMPLATE_SIZE];
+        printf1(TAG_SA, "printing z for j=%d : ", j);
+        dump_hex1(TAG_SA, zi, SEC_AUTH_SCALAR_SIZE);
+
+        crypto_ecc256_scalar_mult(result1_buf, enc->x, zi);
+
+        printf1(TAG_SA, "Result of scalar multiplication of x with zi: ");
+        dump_hex1(TAG_SA, (uint8_t*) result1_buf, SEC_AUTH_POINT_SIZE);
+
+        // scalar multiplication of x with ki
+        printf1(TAG_SA, "Scalar multiplication of x with ki for j = %d \n", j);
+        printf1(TAG_SA, "ki is: ");
+        dump_hex1(TAG_SA, (uint8_t*) &AUTH->msk.k[j * SEC_AUTH_MSK_K_SIZE], SEC_AUTH_MSK_K_SIZE);
+        printf1(TAG_SA, "\n");
+
+        crypto_ecc256_scalar_mult(result2_buf, enc->x, &AUTH->msk.k[j * SEC_AUTH_MSK_K_SIZE]);
+
+        printf1(TAG_SA, "Result of scalar multiplication of x with ki: ");
+        dump_hex1(TAG_SA, (uint8_t*) result2_buf, SEC_AUTH_POINT_SIZE);
+        printf1(TAG_SA, "\n");
+
+        // addition of two previous results
+        printf1(TAG_SA, "Addition of two previous results for j = %d \n", j);
+        crypto_ecc256_addition(result_addition_buf, result1_buf, result2_buf);
+        //crypto_ecc256_addition(&enc->ciphertext[j*SEC_AUTH_POINT_SIZE], result1_buf, result2_buf);
+        printf1(TAG_GREEN, "Result of addition: ");
+        dump_hex1(TAG_GREEN, result_addition_buf, SEC_AUTH_POINT_SIZE);
+
+        // modular inverse of ri
+        crypto_ecc256_modular_inverse(r_mod_inv, &AUTH->msk.r[j * SEC_AUTH_MSK_R_SIZE]);
+        printf1(TAG_GREEN, "Result of mod r: ");
+        dump_hex1(TAG_GREEN, r_mod_inv, SEC_AUTH_MSK_R_SIZE);
+
+        // scalar multiplication of result of addition and mod inv of ri
+        crypto_ecc256_scalar_mult(&enc->ciphertext[j*SEC_AUTH_POINT_SIZE], result_addition_buf, r_mod_inv);
+
+        // For testing, print out encryption results
+        printf1(TAG_GREEN, "Result of encryption: ");
+        dump_hex1(TAG_GREEN, &enc->ciphertext[j*SEC_AUTH_POINT_SIZE], SEC_AUTH_POINT_SIZE);
+        printf1(TAG_GREEN, "\n");
+    }
+
+    free(result1_buf);
+    free(result2_buf);
+    free(result_addition_buf);
+    free(r_mod_inv);
+    //memmove(&getAssertionState.encryptionData.x, enc->x, SEC_AUTH_POINT_SIZE);
+    //memmove(&getAssertionState.encryptionData.ciphertext, enc->ciphertext, SEC_AUTH_MSK_N*SEC_AUTH_POINT_SIZE);
+}
+
+/**
  * Prepares the output for the secure auth register ctap response
  * Output includes: rid
  *
@@ -2370,6 +2518,82 @@ uint8_t ctap_get_register_output(CborEncoder * encoder, CTAP_secure_auth_registe
     check_ret(ret);
 
     ret = cbor_encode_byte_string(&map, REG->rid, SEC_AUTH_RID_SIZE);
+    check_ret(ret);
+
+    ret = cbor_encoder_close_container(encoder, &map);
+    check_ret(ret);
+
+    return 0;
+}
+
+/**
+ * Prepares the output for the secure auth get secret ctap response
+ * Output includes: rid, k_y and y_bar
+ *
+ * @return 0 if successful
+ */
+uint8_t ctap_get_secret_output(CborEncoder * encoder, CTAP_secure_auth_register * REG, int map_size)
+{
+    CborEncoder map;
+    int ret;
+
+    ret = cbor_encoder_create_map(encoder, &map, map_size);
+    check_ret(ret);
+
+    ret = cbor_encode_text_stringz(&map, "rid");
+    check_ret(ret);
+
+    ret = cbor_encode_byte_string(&map, REG->rid, SEC_AUTH_RID_SIZE);
+    check_ret(ret);
+
+    ret = cbor_encode_text_stringz(&map, "secret_key_k");
+    check_ret(ret);
+
+    ret = cbor_encode_byte_string(&map, REG->key.k_y, SEC_AUTH_SCALAR_SIZE);
+    check_ret(ret);
+
+    ret = cbor_encode_text_stringz(&map, "secret_key_y");
+    check_ret(ret);
+
+    ret = cbor_encode_byte_string(&map, REG->key.y_bar, SEC_AUTH_MSK_N * SEC_AUTH_SCALAR_SIZE);
+    check_ret(ret);
+
+    ret = cbor_encoder_close_container(encoder, &map);
+    check_ret(ret);
+
+    return 0;
+}
+
+/**
+ * Prepares the output for the secure auth get secret ctap response
+ * Output includes: rid, x and ciphertext c
+ *
+ * @return 0 if successful
+ */
+uint8_t ctap_get_ciphertext_output(CborEncoder * encoder, CTAP_secure_auth_authenticate * AUTH, int map_size)
+{
+    CborEncoder map;
+    int ret;
+
+    ret = cbor_encoder_create_map(encoder, &map, map_size);
+    check_ret(ret);
+
+    ret = cbor_encode_text_stringz(&map, "rid");
+    check_ret(ret);
+
+    ret = cbor_encode_byte_string(&map, AUTH->rid, SEC_AUTH_RID_SIZE);
+    check_ret(ret);
+
+    ret = cbor_encode_text_stringz(&map, "cipher_x");
+    check_ret(ret);
+
+    ret = cbor_encode_byte_string(&map, AUTH->enc.x, SEC_AUTH_POINT_SIZE);
+    check_ret(ret);
+
+    ret = cbor_encode_text_stringz(&map, "ciphertext");
+    check_ret(ret);
+
+    ret = cbor_encode_byte_string(&map, AUTH->enc.ciphertext, SEC_AUTH_MSK_N*SEC_AUTH_POINT_SIZE);
     check_ret(ret);
 
     ret = cbor_encoder_close_container(encoder, &map);
@@ -2400,31 +2624,31 @@ uint8_t check_matching_rid(CTAP_secure_auth_register * REG)
     return 0;
 }
 
-uint8_t ctap_secure_auth_setup(CborEncoder * encoder, uint8_t * request, int length)
-{
-    CTAP_secure_auth_register REG;
-    int ret = ctap_parse_secure_auth_setup_request(&REG, request, length);
-
-    if (ret != 0) {
-        printf1(TAG_ERR, "error, ctap_secure_auth_setup failed\n");
-        return ret;
-    }
-
-    // check if either rpId or rid do not match
-    if (check_for_rpid_match(&REG) == 0 || check_matching_rid(&REG) != 0) {
-        return CTAP2_ERR_CREDENTIAL_NOT_VALID;
-    }
-
-    // Start setup process
-    ret = secure_auth_setup(&REG.msk);
-    check_ret(ret);
-
-    // prepare output just rid for now
-    ret = ctap_get_register_output(encoder, &REG, 1);
-    check_ret(ret);
-
-    return 0;
-}
+//uint8_t ctap_secure_auth_setup(CborEncoder * encoder, uint8_t * request, int length)
+//{
+//    CTAP_secure_auth_register REG;
+//    int ret = ctap_parse_secure_auth_rpid_rid_request(&REG, request, length);
+//
+//    if (ret != 0) {
+//        printf1(TAG_ERR, "error, ctap_secure_auth_setup failed\n");
+//        return ret;
+//    }
+//
+//    // check if either rpId or rid do not match
+//    if (check_for_rpid_match(&REG) == 0 || check_matching_rid(&REG) != 0) {
+//        return CTAP2_ERR_CREDENTIAL_NOT_VALID;
+//    }
+//
+//    // Start setup process
+//    ret = secure_auth_setup(&REG.msk);
+//    check_ret(ret);
+//
+//    // prepare output just rid for now
+//    ret = ctap_get_register_output(encoder, &REG, 1);
+//    check_ret(ret);
+//
+//    return 0;
+//}
 
 uint8_t ctap_secure_auth_register(CborEncoder * encoder, uint8_t * request, int length)
 {
@@ -2442,6 +2666,13 @@ uint8_t ctap_secure_auth_register(CborEncoder * encoder, uint8_t * request, int 
         return CTAP2_ERR_CREDENTIAL_NOT_VALID;
     }
 
+    // Start setup process
+    ret = secure_auth_setup(&REG.msk);
+    check_ret(ret);
+
+    // Do key derivation
+    secure_auth_key_derivation(&REG);
+
     // create random id
     if (ctap_generate_rng(REG.rid, SEC_AUTH_RID_SIZE) != 1)
     {
@@ -2452,13 +2683,74 @@ uint8_t ctap_secure_auth_register(CborEncoder * encoder, uint8_t * request, int 
     dump_hex1(TAG_GREEN, REG.rid, SEC_AUTH_RID_SIZE);
     memmove(&getAssertionState.rid, REG.rid, SEC_AUTH_RID_SIZE);
 
-    // prepare output just rid for now
-    ret = ctap_get_register_output(encoder, &REG, 1);
+    // prepare output with rid and sk_b
+    ret = ctap_get_secret_output(encoder, &REG, 3);
     check_ret(ret);
 
     return 0;
 }
 
+uint8_t ctap_secure_auth_authenticate(CborEncoder * encoder, uint8_t * request, int length) {
+    CTAP_secure_auth_authenticate AUTH;
+
+    int ret = ctap_parse_secure_auth_auth_request(&AUTH, request, length);
+    if (ret != 0) {
+        printf1(TAG_ERR, "error, ctap_parse_secure_auth_auth_request failed\n");
+        return ret;
+    }
+
+    // check if either rpId or rid do not match
+    if (check_for_rpid_match(&AUTH) == 0 || check_matching_rid(&AUTH) != 0) {
+        return CTAP2_ERR_CREDENTIAL_NOT_VALID;
+    }
+
+    // Get msk from authenticator state
+    for (int i = 0; i < SEC_AUTH_MSK_N; i++) {
+        memmove(&AUTH.msk.k[i * SEC_AUTH_MSK_K_SIZE],
+                &getAssertionState.msk.k[i * SEC_AUTH_MSK_K_SIZE],
+                SEC_AUTH_MSK_K_SIZE);
+        memmove(&AUTH.msk.r[i * SEC_AUTH_MSK_R_SIZE],
+                &getAssertionState.msk.r[i * SEC_AUTH_MSK_R_SIZE],
+                SEC_AUTH_MSK_R_SIZE);
+    }
+
+    // Do Encryption
+    secure_auth_encrypt(&AUTH);
+
+    // prepare output with rid and sk_b
+    ret = ctap_get_ciphertext_output(encoder, &AUTH, 3);
+    check_ret(ret);
+
+    return 0;
+}
+
+uint8_t ctap_secure_auth_get_secret(CborEncoder * encoder, uint8_t * request, int length) {
+    CTAP_secure_auth_register REG;
+
+    // Parse the received request
+    int ret = ctap_parse_secure_auth_rpid_rid_request(&REG, request, length);
+
+    if (ret != 0) {
+        printf1(TAG_ERR, "error, ctap_secure_auth_get_secret failed\n");
+        return ret;
+    }
+
+    // check if either rpId or rid do not match
+    if (check_for_rpid_match(&REG) == 0 || check_matching_rid(&REG) != 0) {
+        return CTAP2_ERR_CREDENTIAL_NOT_VALID;
+    }
+
+
+
+    // Do key derivation
+    secure_auth_key_derivation(&REG);
+
+    // prepare output with 3 items
+    ret = ctap_get_secret_output(encoder, &REG, 3);
+    check_ret(ret);
+
+    return 0;
+}
 
 uint8_t ctap_request(uint8_t * pkt_raw, int length, CTAP_RESPONSE * resp)
 {
@@ -2582,16 +2874,35 @@ uint8_t ctap_request(uint8_t * pkt_raw, int length, CTAP_RESPONSE * resp)
             resp->length = cbor_encoder_get_buffer_size(&encoder, buf);
             dump_hex1(TAG_DUMP, buf, resp->length);
             break;
-        case CTAP_SECURE_AUTH_SETUP:
-            printf1(TAG_CTAP, "CTAP_SECURE_AUTH_SETUP\n");
-            timestamp();
+        case CTAP_SECURE_AUTH_AUTHENTICATE:
+            printf1(TAG_CTAP,"CTAP_SECURE_AUTH_AUTHENTICATE\n");
 
-            status = ctap_secure_auth_setup(&encoder, pkt_raw, length);
-            printf1(TAG_TIME,"secure_auth_setup time: %d ms\n", timestamp());
+            timestamp();
+            status = ctap_secure_auth_authenticate(&encoder, pkt_raw, length);
+            printf1(TAG_TIME,"ctap_secure_auth_auth time: %d ms\n", timestamp());
 
             resp->length = cbor_encoder_get_buffer_size(&encoder, buf);
             dump_hex1(TAG_DUMP, buf, resp->length);
             break;
+//        case CTAP_SECURE_AUTH_SETUP:
+//            printf1(TAG_CTAP, "CTAP_SECURE_AUTH_SETUP\n");
+//            timestamp();
+//
+//            status = ctap_secure_auth_setup(&encoder, pkt_raw, length);
+//            printf1(TAG_TIME,"secure_auth_setup time: %d ms\n", timestamp());
+//
+//            resp->length = cbor_encoder_get_buffer_size(&encoder, buf);
+//            dump_hex1(TAG_DUMP, buf, resp->length);
+//            break;
+//        case CTAP_SECURE_AUTH_GET_SECRET:
+//            printf1(TAG_CTAP,"CTAP_SECURE_AUTH_GET_SECRET\n");
+//            status = ctap_secure_auth_get_secret(&encoder, pkt_raw, length);
+//
+//            resp->length = cbor_encoder_get_buffer_size(&encoder, buf);
+//
+//            printf1(TAG_DUMP,"cbor [%d]: \n",  resp->length);
+//            dump_hex1(TAG_DUMP, buf, resp->length);
+//            break;
         default:
             status = CTAP1_ERR_INVALID_COMMAND;
             printf2(TAG_ERR,"error, invalid cmd: 0x%02x\n", cmd);

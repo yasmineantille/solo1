@@ -20,8 +20,9 @@
 #define CTAP_VENDOR_FIRST           0x40
 #define CTAP_CBOR_CRED_MGMT_PRE     0x41
 #define CTAP_VENDOR_LAST            0xBF
-#define CTAP_SECURE_AUTH_REGISTER   0x11
-#define CTAP_SECURE_AUTH_SETUP      0x12
+#define CTAP_SECURE_AUTH_GET_SECRET 0x0E
+#define CTAP_SECURE_AUTH_REGISTER       0x11
+#define CTAP_SECURE_AUTH_AUTHENTICATE   0x12
 
 #define MC_clientDataHash         0x01
 #define MC_rp                     0x02
@@ -157,21 +158,22 @@
 
 
 /// For Secure Auth
-#define SEC_AUTH_RID_SIZE       8
+#define SEC_AUTH_RID_SIZE       32
 
 // For master secret
-#define SEC_AUTH_MSK_N          0x40    // 0x8 overflows memory space
+#define SEC_AUTH_MSK_N          0x05        //0x20    // 0x8 overflows memory space
 #define SEC_AUTH_MSK_K_SIZE     32
 #define SEC_AUTH_MSK_R_SIZE     32
-#define SEC_AUTH_PUBLIC_KEY_SIZE    64
+#define SEC_AUTH_POINT_SIZE     64
+#define SEC_AUTH_SCALAR_SIZE    32
 
-#define SEC_AUTH_TEMPLATE_N     0x80 // represents 128 in hex
+#define SEC_AUTH_TEMPLATE_N     0x05        //0x20
 #define SEC_AUTH_TEMPLATE_SIZE  1
 
 // For Secure Auth extra requests
 #define SA_rpId               0x01
 #define SA_template           0x02
-#define SA_rid                0x02
+#define SA_rid                0x03
 
 
 
@@ -269,13 +271,33 @@ typedef struct {
     uint8_t r[SEC_AUTH_MSK_N * SEC_AUTH_MSK_R_SIZE];
 } SecureAuthMSK;
 
+typedef struct {
+    uint8_t k_y[SEC_AUTH_SCALAR_SIZE];
+    uint8_t y_bar[SEC_AUTH_MSK_N * SEC_AUTH_SCALAR_SIZE];
+} SecureAuthKey;
+
+typedef struct {
+    uint8_t ciphertext[SEC_AUTH_MSK_N*SEC_AUTH_POINT_SIZE];
+    uint8_t x[SEC_AUTH_POINT_SIZE];
+} SecureAuthEncrypt;
+
 typedef struct
 {
     struct rpId rp;
     uint8_t rid[SEC_AUTH_RID_SIZE];
     uint8_t template[SEC_AUTH_TEMPLATE_N*SEC_AUTH_TEMPLATE_SIZE];
     SecureAuthMSK msk;
+    SecureAuthKey key;
 } CTAP_secure_auth_register;
+
+typedef struct {
+    struct rpId rp;
+    uint8_t rid[SEC_AUTH_RID_SIZE];
+    uint8_t template[SEC_AUTH_TEMPLATE_N*SEC_AUTH_TEMPLATE_SIZE];
+    SecureAuthMSK msk;
+    SecureAuthEncrypt enc;
+} CTAP_secure_auth_authenticate;
+
 
 typedef struct
 {
@@ -415,6 +437,7 @@ struct _getAssertionState {
 
     uint8_t rid[SEC_AUTH_RID_SIZE];
     SecureAuthMSK msk;
+    SecureAuthKey secretKey;
 };
 
 void ctap_response_init(CTAP_RESPONSE * resp);

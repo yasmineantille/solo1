@@ -2352,6 +2352,80 @@ static int secure_auth_setup(SecureAuthMSK * msk)
     return 0;
 }
 
+static void secure_auth_enrich_template_registration(SecureAuthEnrichedTemplate * temp, CTAP_secure_auth_register * REG)
+{
+    uint32_t sum_of_squares = 0;
+
+    // prepare the template array for calculations
+    for(int i = 0; i < SEC_AUTH_TEMPLATE_N; i++) {
+        // add y_i value to sum of squares
+        sum_of_squares += REG->template[i * SEC_AUTH_TEMPLATE_SIZE] * REG->template[i * SEC_AUTH_TEMPLATE_SIZE];
+
+        // pad the yi value with zeroes
+        uint8_t yi[32];
+        memset(yi, 0, 32); // Set all bytes in the array to 0
+        yi[31] = REG->template[i * SEC_AUTH_TEMPLATE_SIZE];
+        memmove(&temp->template[i * SEC_AUTH_SCALAR_SIZE], yi, SEC_AUTH_SCALAR_SIZE);
+    }
+
+    // Enrich the template array with values ||y||^2 and 1
+    uint8_t value_one[32];
+    memset(value_one, 0, 32);
+    value_one[31] = 1;
+
+    printf1(TAG_SA, "sum_of_squares value: %u\n", sum_of_squares);
+    // transform the sum of squares into appropriate value
+    uint8_t sum_of_squares_byte_array[32]; // Byte array of size 32
+    memset(sum_of_squares_byte_array, 0, 32);   // set all other values to 0
+    // Split the uint32_t value into four uint8_t values at end of byte array
+    // max possible value should be 8323200
+    sum_of_squares_byte_array[31] = (uint8_t)(sum_of_squares & 0xFF);
+    sum_of_squares_byte_array[30] = (uint8_t)((sum_of_squares >> 8) & 0xFF);
+    sum_of_squares_byte_array[29] = (uint8_t)((sum_of_squares >> 16) & 0xFF);
+    sum_of_squares_byte_array[28] = (uint8_t)((sum_of_squares >> 24) & 0xFF);
+
+    // In registration request the last value is 1 and the 2nd last value is the sum of squares
+    memmove(&temp->template[(SEC_AUTH_TEMPLATE_N) * SEC_AUTH_SCALAR_SIZE], &sum_of_squares_byte_array, SEC_AUTH_SCALAR_SIZE);
+    memmove(&temp->template[(SEC_AUTH_TEMPLATE_N+1) * SEC_AUTH_SCALAR_SIZE], &value_one, SEC_AUTH_SCALAR_SIZE);
+}
+
+static void secure_auth_enrich_template_authentication(SecureAuthEnrichedTemplate * temp, CTAP_secure_auth_authenticate * AUTH)
+{
+    uint32_t sum_of_squares = 0;
+
+    // prepare the template array for calculations
+    for(int i = 0; i < SEC_AUTH_TEMPLATE_N; i++) {
+        // add y_i value to sum of squares
+        sum_of_squares += AUTH->template[i * SEC_AUTH_TEMPLATE_SIZE] * AUTH->template[i * SEC_AUTH_TEMPLATE_SIZE];
+
+        // pad the zi value with zeroes
+        uint8_t zi[32];
+        memset(zi, 0, 32); // Set all bytes in the array to 0
+        zi[31] = AUTH->template[i * SEC_AUTH_TEMPLATE_SIZE];
+
+        memmove(&temp->template[i * SEC_AUTH_SCALAR_SIZE], zi, SEC_AUTH_SCALAR_SIZE);
+    }
+
+    // Enrich the template array with values ||y||^2 and 1
+    uint8_t value_one[32];
+    memset(value_one, 0, 32);
+    value_one[31] = 1;
+
+    printf1(TAG_SA, "sum_of_squares value: %u\n", sum_of_squares);
+    // transform the sum of squares into appropriate value
+    uint8_t sum_of_squares_byte_array[32]; // Byte array of size 32
+    memset(sum_of_squares_byte_array, 0, 32);   // set all other values to 0
+    // Split the uint32_t value into four uint8_t values
+    sum_of_squares_byte_array[31] = (uint8_t)(sum_of_squares & 0xFF);
+    sum_of_squares_byte_array[30] = (uint8_t)((sum_of_squares >> 8) & 0xFF);
+    sum_of_squares_byte_array[29] = (uint8_t)((sum_of_squares >> 16) & 0xFF);
+    sum_of_squares_byte_array[28] = (uint8_t)((sum_of_squares >> 24) & 0xFF);
+
+    // In authentication request the 2nd last value is 1 and the last value is the sum of squares
+    memmove(&temp->template[(SEC_AUTH_TEMPLATE_N) * SEC_AUTH_SCALAR_SIZE], &value_one, SEC_AUTH_SCALAR_SIZE);
+    memmove(&temp->template[(SEC_AUTH_TEMPLATE_N+1) * SEC_AUTH_SCALAR_SIZE], &sum_of_squares_byte_array, SEC_AUTH_SCALAR_SIZE);
+}
+
 /**
  * Key derivation for secure auth extension
  * k_y = sum k_i*y_i (mod n)
@@ -2363,47 +2437,29 @@ static void secure_auth_key_derivation(CTAP_secure_auth_register * REG)
     SecureAuthMSK * msk = &REG->msk;
     SecureAuthKey * sa_key = &REG->key;
 
-    for(int i = 0; i < SEC_AUTH_TEMPLATE_N; i++) {
+    // enrich template
+    SecureAuthEnrichedTemplate temp;
+    secure_auth_enrich_template_registration(&temp, REG);
+
+    // Start key derivation for all elements of template
+    for(int i = 0; i < SEC_AUTH_TEMPLATE_ADJUSTED; i++) {
         printf1(TAG_GREEN, "Key derivation for i=%d \n", i);
         printf1(TAG_GREEN, "y_i value: ");
-        dump_hex1(TAG_GREEN, &REG->template[i * SEC_AUTH_TEMPLATE_SIZE], SEC_AUTH_TEMPLATE_SIZE);
+        dump_hex1(TAG_GREEN, &temp.template[i * SEC_AUTH_SCALAR_SIZE], SEC_AUTH_SCALAR_SIZE);
         printf1(TAG_GREEN, "r_i value: ");
         dump_hex1(TAG_GREEN, &msk->r[i * SEC_AUTH_MSK_R_SIZE], SEC_AUTH_MSK_R_SIZE);
 
-        // pad the yi value with zeroes
-        uint8_t yi[32];
-        memset(yi, 0, 32); // Set all bytes in the array to 0
-        yi[31] = REG->template[i * SEC_AUTH_TEMPLATE_SIZE];
-
-        crypto_calculate_mod_mult(&sa_key->y_bar[i * SEC_AUTH_SCALAR_SIZE],
-                                  yi,
+        // calculate ri * yi
+        crypto_calculate_mod_mult(&sa_key->y_bar[i * SEC_AUTH_SCALAR_SIZE], &temp.template[i*SEC_AUTH_SCALAR_SIZE],
                                   &msk->r[i * SEC_AUTH_MSK_R_SIZE]);
         printf1(TAG_GREEN, "Resulting y_bar value: ");
         dump_hex1(TAG_GREEN, &sa_key->y_bar[i * SEC_AUTH_SCALAR_SIZE], SEC_AUTH_SCALAR_SIZE);
         printf1(TAG_GREEN, "\n");
         memmove(&getAssertionState.secretKey.y_bar[i * SEC_AUTH_SCALAR_SIZE], &sa_key->y_bar[i * SEC_AUTH_SCALAR_SIZE], SEC_AUTH_SCALAR_SIZE);
-
-        // calculate ri * yi
-        // Check if template value (yi) equals 1, then just return r because mod mult doesn't work with 1
-//        if (&REG->template[i*SEC_AUTH_TEMPLATE_SIZE] == 1) {
-//            printf1(TAG_SA, "Template value equals 1");
-//            memmove(&sa_key->y_bar[i * SEC_AUTH_SCALAR_SIZE], &msk->r[i * SEC_AUTH_MSK_R_SIZE], SEC_AUTH_SCALAR_SIZE);
-//            printf1(TAG_GREEN, "Resulting y_bar value: ");
-//            dump_hex1(TAG_GREEN, &sa_key->y_bar[i * SEC_AUTH_SCALAR_SIZE], SEC_AUTH_SCALAR_SIZE);
-//            printf1(TAG_GREEN, "\n");
-//            memmove(&getAssertionState.secretKey.y_bar[i * SEC_AUTH_SCALAR_SIZE], &sa_key->y_bar[i * SEC_AUTH_SCALAR_SIZE], SEC_AUTH_SCALAR_SIZE);
-//        } else {
-//            crypto_calculate_mod_mult(&sa_key->y_bar[i * SEC_AUTH_SCALAR_SIZE], &REG->template[i*SEC_AUTH_TEMPLATE_SIZE],
-//                                      &msk->r[i * SEC_AUTH_MSK_R_SIZE]);
-//            printf1(TAG_GREEN, "Resulting y_bar value: ");
-//            dump_hex1(TAG_GREEN, &sa_key->y_bar[i * SEC_AUTH_SCALAR_SIZE], SEC_AUTH_SCALAR_SIZE);
-//            printf1(TAG_GREEN, "\n");
-//            memmove(&getAssertionState.secretKey.y_bar[i * SEC_AUTH_SCALAR_SIZE], &sa_key->y_bar[i * SEC_AUTH_SCALAR_SIZE], SEC_AUTH_SCALAR_SIZE);
-//        }
     }
 
     // calculate ki * yi
-    crypto_calculate_inner_product(sa_key->k_y, msk->k, REG->template);
+    crypto_calculate_inner_product(sa_key->k_y, msk->k, temp.template);
     printf1(TAG_SA, "Resulting k_y value: ");
     dump_hex1(TAG_SA, sa_key->k_y, SEC_AUTH_SCALAR_SIZE);
 
@@ -2424,10 +2480,14 @@ static void secure_auth_encrypt(CTAP_secure_auth_authenticate * AUTH)
     printf1(TAG_SA, "Before encryption!\n");
     SecureAuthEncrypt * enc = &AUTH->enc;
 
+    // enrich template
+    SecureAuthEnrichedTemplate temp;
+    secure_auth_enrich_template_authentication(&temp, AUTH);
+
     // For testing print out data to encrypt
     for (int i = 0; i < SEC_AUTH_MSK_N; i++) {
         printf1(TAG_SA, "printing z for i=%d : ", i);
-        dump_hex1(TAG_SA, &AUTH->template[i*SEC_AUTH_TEMPLATE_SIZE], SEC_AUTH_TEMPLATE_SIZE);
+        dump_hex1(TAG_SA, &temp.template[i*SEC_AUTH_SCALAR_SIZE], SEC_AUTH_SCALAR_SIZE);
     }
 
     uint8_t priv_key_buf[SEC_AUTH_SCALAR_SIZE];  // buffer for private key that can be dismissed
@@ -2443,21 +2503,45 @@ static void secure_auth_encrypt(CTAP_secure_auth_authenticate * AUTH)
     uint8_t* result_addition_buf = (uint8_t*)malloc(SEC_AUTH_POINT_SIZE);
     uint8_t* r_mod_inv = (uint8_t*)malloc(SEC_AUTH_MSK_R_SIZE);
 
+    uint8_t value_one[32];
+    memset(value_one, 0, 32);
+    value_one[31] = 1;
+
+    uint8_t value_two[32];
+    memset(value_two, 0, 32);
+    value_two[31] = 2;
+
     // encrypt message
     for (int j = 0; j < SEC_AUTH_MSK_N; ++j) {
         // scalar multiplication of x with zi
-
-        // pad the zi value with zeroes
-        uint8_t zi[32];
-        memset(zi, 0, 32); // Set all bytes in the array to 0
-        zi[31] = AUTH->template[j * SEC_AUTH_TEMPLATE_SIZE];
         printf1(TAG_SA, "printing z for j=%d : ", j);
-        dump_hex1(TAG_SA, zi, SEC_AUTH_SCALAR_SIZE);
+        dump_hex1(TAG_SA, &temp.template[j*SEC_AUTH_SCALAR_SIZE], SEC_AUTH_SCALAR_SIZE);
 
-        crypto_ecc256_scalar_mult(result1_buf, enc->x, zi);
+        if (j == (SEC_AUTH_MSK_N-1)) {
+            crypto_ecc256_scalar_mult(result1_buf, enc->x, &temp.template[j * SEC_AUTH_SCALAR_SIZE]);
+        } else if (j == (SEC_AUTH_MSK_N-2)) {
+            memmove(result1_buf, enc->x, SEC_AUTH_POINT_SIZE);
+        } else {
+            crypto_ecc256_mult_minus_two(result1_buf, &temp.template[j * SEC_AUTH_SCALAR_SIZE]);
+            printf1(TAG_SA, "Result of y mult minus two: ");
+            dump_hex1(TAG_SA, (uint8_t *) result1_buf, SEC_AUTH_SCALAR_SIZE);
+            crypto_ecc256_scalar_mult(result1_buf, enc->x, result1_buf);
+        }
 
         printf1(TAG_SA, "Result of scalar multiplication of x with zi: ");
         dump_hex1(TAG_SA, (uint8_t*) result1_buf, SEC_AUTH_POINT_SIZE);
+
+//        if (j != (SEC_AUTH_MSK_N-1) && j != (SEC_AUTH_MSK_N-2)) {
+//            // mulitply with 2
+//            crypto_ecc256_scalar_mult(result1_buf, result1_buf, value_two);
+//            printf1(TAG_SA, "Result of multiplication with 2: ");
+//            dump_hex1(TAG_SA, (uint8_t*) result1_buf, SEC_AUTH_POINT_SIZE);
+//
+//            // negate result of g*z_i (only for original template elements, not the enriched ones)
+//            crypto_ecc256_negate_point(result1_neg_buf, result1_buf);
+//            printf1(TAG_SA, "Result of negating the previous result: skipped\n ");
+//            //dump_hex1(TAG_SA, (uint8_t*) result1_neg_buf, SEC_AUTH_POINT_SIZE);
+//        }
 
         // scalar multiplication of x with ki
         printf1(TAG_SA, "Scalar multiplication of x with ki for j = %d \n", j);
@@ -2479,6 +2563,8 @@ static void secure_auth_encrypt(CTAP_secure_auth_authenticate * AUTH)
         dump_hex1(TAG_GREEN, result_addition_buf, SEC_AUTH_POINT_SIZE);
 
         // modular inverse of ri
+        printf1(TAG_GREEN, "ri is: ");
+        dump_hex1(TAG_GREEN, &AUTH->msk.r[j * SEC_AUTH_MSK_R_SIZE], SEC_AUTH_MSK_R_SIZE);
         crypto_ecc256_modular_inverse(r_mod_inv, &AUTH->msk.r[j * SEC_AUTH_MSK_R_SIZE]);
         printf1(TAG_GREEN, "Result of mod r: ");
         dump_hex1(TAG_GREEN, r_mod_inv, SEC_AUTH_MSK_R_SIZE);
@@ -2624,32 +2710,6 @@ uint8_t check_matching_rid(CTAP_secure_auth_register * REG)
     return 0;
 }
 
-//uint8_t ctap_secure_auth_setup(CborEncoder * encoder, uint8_t * request, int length)
-//{
-//    CTAP_secure_auth_register REG;
-//    int ret = ctap_parse_secure_auth_rpid_rid_request(&REG, request, length);
-//
-//    if (ret != 0) {
-//        printf1(TAG_ERR, "error, ctap_secure_auth_setup failed\n");
-//        return ret;
-//    }
-//
-//    // check if either rpId or rid do not match
-//    if (check_for_rpid_match(&REG) == 0 || check_matching_rid(&REG) != 0) {
-//        return CTAP2_ERR_CREDENTIAL_NOT_VALID;
-//    }
-//
-//    // Start setup process
-//    ret = secure_auth_setup(&REG.msk);
-//    check_ret(ret);
-//
-//    // prepare output just rid for now
-//    ret = ctap_get_register_output(encoder, &REG, 1);
-//    check_ret(ret);
-//
-//    return 0;
-//}
-
 uint8_t ctap_secure_auth_register(CborEncoder * encoder, uint8_t * request, int length)
 {
     printf1(TAG_SA, "reached ctap_secure_auth_register ");
@@ -2719,34 +2779,6 @@ uint8_t ctap_secure_auth_authenticate(CborEncoder * encoder, uint8_t * request, 
 
     // prepare output with rid and sk_b
     ret = ctap_get_ciphertext_output(encoder, &AUTH, 3);
-    check_ret(ret);
-
-    return 0;
-}
-
-uint8_t ctap_secure_auth_get_secret(CborEncoder * encoder, uint8_t * request, int length) {
-    CTAP_secure_auth_register REG;
-
-    // Parse the received request
-    int ret = ctap_parse_secure_auth_rpid_rid_request(&REG, request, length);
-
-    if (ret != 0) {
-        printf1(TAG_ERR, "error, ctap_secure_auth_get_secret failed\n");
-        return ret;
-    }
-
-    // check if either rpId or rid do not match
-    if (check_for_rpid_match(&REG) == 0 || check_matching_rid(&REG) != 0) {
-        return CTAP2_ERR_CREDENTIAL_NOT_VALID;
-    }
-
-
-
-    // Do key derivation
-    secure_auth_key_derivation(&REG);
-
-    // prepare output with 3 items
-    ret = ctap_get_secret_output(encoder, &REG, 3);
     check_ret(ret);
 
     return 0;

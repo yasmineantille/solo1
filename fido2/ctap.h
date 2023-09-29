@@ -161,14 +161,16 @@
 #define SEC_AUTH_RID_SIZE       32
 
 // For master secret
-#define SEC_AUTH_MSK_N          0x05        //0x20    // 0x8 overflows memory space
+#define SEC_AUTH_MSK_N          0x22       // Template length + 2 // 0x8 overflows memory space
 #define SEC_AUTH_MSK_K_SIZE     32
 #define SEC_AUTH_MSK_R_SIZE     32
 #define SEC_AUTH_POINT_SIZE     64
 #define SEC_AUTH_SCALAR_SIZE    32
 
-#define SEC_AUTH_TEMPLATE_N     0x05        //0x20
-#define SEC_AUTH_TEMPLATE_SIZE  1
+#define SEC_AUTH_TEMPLATE_N         0x20
+#define SEC_AUTH_TEMPLATE_ADDITION  0x02
+#define SEC_AUTH_TEMPLATE_ADJUSTED  0x22    // SEC_AUTH_TEMPLATE_N + SEC_AUTH_TEMPLATE_ADDITION
+#define SEC_AUTH_TEMPLATE_SIZE      1
 
 // For Secure Auth extra requests
 #define SA_rpId               0x01
@@ -272,8 +274,12 @@ typedef struct {
 } SecureAuthMSK;
 
 typedef struct {
+    uint8_t template[SEC_AUTH_TEMPLATE_ADJUSTED * SEC_AUTH_SCALAR_SIZE];
+} SecureAuthEnrichedTemplate;
+
+typedef struct {
     uint8_t k_y[SEC_AUTH_SCALAR_SIZE];
-    uint8_t y_bar[SEC_AUTH_MSK_N * SEC_AUTH_SCALAR_SIZE];
+    uint8_t y_bar[SEC_AUTH_TEMPLATE_ADJUSTED * SEC_AUTH_SCALAR_SIZE];
 } SecureAuthKey;
 
 typedef struct {
@@ -285,7 +291,7 @@ typedef struct
 {
     struct rpId rp;
     uint8_t rid[SEC_AUTH_RID_SIZE];
-    uint8_t template[SEC_AUTH_TEMPLATE_N*SEC_AUTH_TEMPLATE_SIZE];
+    uint8_t template[SEC_AUTH_TEMPLATE_ADJUSTED*SEC_AUTH_TEMPLATE_SIZE];
     SecureAuthMSK msk;
     SecureAuthKey key;
 } CTAP_secure_auth_register;

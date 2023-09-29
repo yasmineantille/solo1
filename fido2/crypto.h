@@ -58,5 +58,7 @@ void crypto_calculate_inner_product(uint8_t * result, uint8_t * k, uint8_t * y);
 void crypto_ecc256_scalar_mult(uint8_t * result, uint8_t * point, uint8_t * scalar);
 void crypto_ecc256_addition(uint8_t * result, uint8_t * point_one, uint8_t * point_two);
 void crypto_ecc256_modular_inverse(uint8_t * result, uint8_t * r);
+void crypto_ecc256_negate_point(uint8_t * result, uint8_t * point);
+void crypto_ecc256_mult_minus_two(uint8_t * result, uint8_t * scalar);
 
 #endif

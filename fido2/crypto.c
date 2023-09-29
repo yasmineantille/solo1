@@ -332,13 +332,8 @@ void crypto_calculate_inner_product(uint8_t * result, uint8_t * k, uint8_t * y)
     memset(result, 0, sizeof(SEC_AUTH_SCALAR_SIZE));  // set result to 0
     uint8_t temp_result[SEC_AUTH_SCALAR_SIZE];
 
-    for(int i = 0; i < SEC_AUTH_TEMPLATE_N; i++) {
-        // pad the yi value with zeroes
-        uint8_t yi[32];
-        memset(yi, 0, 32); // Set all bytes in the array to 0
-        yi[31] = y[i * SEC_AUTH_TEMPLATE_SIZE];
-
-        if(uECC_multiply_mod_mult(temp_result, &k[i * SEC_AUTH_SCALAR_SIZE], yi, _es256_curve) != 1) {
+    for(int i = 0; i < SEC_AUTH_TEMPLATE_ADJUSTED; i++) {
+        if(uECC_multiply_mod_mult(temp_result, &k[i * SEC_AUTH_SCALAR_SIZE], &y[i*SEC_AUTH_SCALAR_SIZE], _es256_curve) != 1) {
             printf1(TAG_ERR, "Error, uECC_multiply_mod_mult() failed\n");
             exit(1);
         }
@@ -365,6 +360,28 @@ void crypto_ecc256_scalar_mult(uint8_t * result, uint8_t * point, uint8_t * scal
             printf1(TAG_ERR, "Not valid public key!");
             exit(1);
         }
+    }
+}
+
+void crypto_ecc256_negate_point(uint8_t * result, uint8_t * point)
+{
+    if (uECC_point_negate(result, point, _es256_curve) != 1) {
+        printf1(TAG_ERR, "Error, uECC_point_negate() failed\n");
+        exit(1);
+    } else {
+        if (uECC_valid_public_key(result, _es256_curve) != 1) {
+            printf1(TAG_SA, "uECC_valid_public_key failed for negate point: ");
+            dump_hex1(TAG_SA, result, SEC_AUTH_POINT_SIZE);
+            printf1(TAG_ERR, "Not valid public key!\n");
+            exit(1);
+        }
+    }
+}
+
+void crypto_ecc256_mult_minus_two(uint8_t * result, uint8_t * scalar) {
+    if (uECC_multiply_minus_two(result, scalar, _es256_curve) != 1) {
+        printf1(TAG_ERR, "Error, uECC_multiply_minus_two() failed\n");
+        exit(1);
     }
 }
 
